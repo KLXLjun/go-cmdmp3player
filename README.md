@@ -20,4 +20,4 @@ golang 命令行 MP3 播放器
 <kbd>Esc</kbd> 退出
 
 ## 预览
-![预览](https://github.com/KLXLjun/go-cmdmp3player/blob/master/img/20210907223142.jpg)
+![预览](https://github.com/KLXLjun/go-cmdmp3player/blob/main/img/20210907223142.jpg)
