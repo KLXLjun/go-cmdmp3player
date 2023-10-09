@@ -6,6 +6,8 @@ import (
 	"log"
 	"math"
 	"os"
+	"path"
+	"strings"
 	"time"
 	"unicode"
 
@@ -16,15 +18,17 @@ import (
 	"github.com/gdamore/tcell"
 )
 
-//扫描目录
-var filepath string = "J:/temp"
+// 扫描目录
+var filepath string = "/home/huyaoi/音乐/Sdcard/Music"
 
-//绘制行
+// 绘制行
 func drawTextLine(screen tcell.Screen, x, y int, s string, style tcell.Style) {
 	for _, r := range s {
 		screen.SetContent(x, y, r, nil, style)
 		if len(string(r)) == 3 || len(string(r)) == 2 {
-			x = x + 2
+			x++
+			screen.SetContent(x, y, rune('_'), nil, style)
+			x++
 		} else {
 			x++
 		}
@@ -32,24 +36,23 @@ func drawTextLine(screen tcell.Screen, x, y int, s string, style tcell.Style) {
 }
 
 var nowdispindex int = 0           //当前指向的歌曲
-var nowdispmaxindex int = 0        //当前页最大歌曲数量
-var nowpage int = 0                //正在播放列表哪一页
+var nowdispmaxindex int = 0        //最大歌曲数量
 var listarray = make([]listrow, 0) //歌曲列表
 var tip string = ""                //提示
 
-var nowplayindex = -1     //当前播放歌曲位于本页的下标
-var nowplayarrindex = -1  //当前播放歌曲在数组中的下标
-var nowplayindexpage = -1 //当前播放歌曲属于那个页面
-var nowplaytitle = ""     //当前播放歌曲标题
+var nowplayindex = -1 //当前播放歌曲位于本页的下标
+var nowplaytitle = "" //当前播放歌曲标题
+var nowlrc = ""       //当前歌词
 
-var maxpage = 0     //最大页面
 var maxpagerow = 10 //每页最大
 
-//音频引擎
+// 音频引擎
 var ap *audioPanel
 var fsteam *os.File
 var ssc beep.StreamSeekCloser
 var bformat beep.Format
+
+var lrcEngine []lrcStruct = nil
 
 type listrow struct {
 	name     string
@@ -64,7 +67,7 @@ type audioPanel struct {
 	volume     *effects.Volume
 }
 
-//音频面板
+// 音频面板
 func newAudioPanel(sampleRate beep.SampleRate, streamer beep.StreamSeeker) *audioPanel {
 	ctrl := &beep.Ctrl{Streamer: beep.Loop(-1, streamer)}
 	resampler := beep.ResampleRatio(4, 1, ctrl)
@@ -76,7 +79,7 @@ func (ap *audioPanel) play() {
 	speaker.Play(ap.volume)
 }
 
-//画面绘制
+// 画面绘制
 func TDrawCls(screen tcell.Screen) {
 	//主页背景样式
 	mainBackgroundStyle := tcell.StyleDefault.
@@ -102,44 +105,54 @@ func TDrawCls(screen tcell.Screen) {
 
 	//提示样式
 	tipStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorBlue)
+		Foreground(tcell.ColorGreen)
 
 	//清空
 	screen.Fill(' ', mainBackgroundStyle)
 
-	//绘制列表
-	startv := nowpage * maxpagerow
-	lenv := 0
-	if nowpage == maxpage {
-		lenv = len(listarray) - startv
+	//获取所有页数
+	allPage := int(math.Ceil(float64(nowdispmaxindex) / float64(maxpagerow)))
+
+	//获取选择的项的页数
+	selectIndexPage := int(math.Ceil(float64(nowdispindex+1) / float64(maxpagerow)))
+
+	nowPageMaxRow := 0
+	if selectIndexPage < allPage {
+		nowPageMaxRow = maxpagerow
 	} else {
-		lenv = (nowpage+1)*maxpagerow - startv
+		nowPageMaxRow = nowdispmaxindex - ((selectIndexPage - 1) * maxpagerow)
 	}
 
-	nowdispmaxindex = lenv
-	countt := 0                                                                                 //指定绘制行数
-	drawTextLine(screen, 5, 1, fmt.Sprintf("%d/%d", nowpage+1, maxpage+1), mainBackgroundStyle) //当前显示页数/最大页数
-	for i := 0; i < lenv; i++ {
-		//判断是否是当前光标指向的项目
-		if countt == nowdispindex {
+	//绘制页数和总项目数
+	drawTextLine(screen, 5, 1, fmt.Sprintf("%d/%d [%d/%d]", selectIndexPage, allPage, nowdispindex+1, nowdispmaxindex), mainBackgroundStyle) //当前显示页数/最大页数
+
+	//绘制列表
+	for i := 0; i < nowPageMaxRow; i++ {
+		var nowFirstIndex = (selectIndexPage - 1) * maxpagerow
+		if nowFirstIndex+i == nowdispindex {
 			//判断是否是正在播放的
-			if nowplayindexpage == nowpage && countt == nowplayindex {
-				drawTextLine(screen, 0, 3+countt, " >>> "+listarray[startv+countt].name, PlaySelectStyle)
+			if nowFirstIndex+i == nowplayindex {
+				drawTextLine(screen, 0, 2+i, " >>> ", PlaySelectStyle)
+				drawTextLine(screen, 5, 2+i, listarray[nowFirstIndex+i].name, PlaySelectStyle)
 			} else {
-				drawTextLine(screen, 5, 3+countt, listarray[startv+countt].name, selectStyle)
+				drawTextLine(screen, 0, 2+i, " --> ", PlaySelectStyle)
+				drawTextLine(screen, 5, 2+i, listarray[nowFirstIndex+i].name, selectStyle)
 			}
 		} else {
 			//未选择项目
-			if nowplayindexpage == nowpage && countt == nowplayindex {
-				drawTextLine(screen, 0, 3+countt, " >>> "+listarray[startv+countt].name, mainPlayStyle)
+			if nowFirstIndex+i == nowplayindex {
+				drawTextLine(screen, 0, 2+i, " >>> ", mainPlayStyle)
+				drawTextLine(screen, 5, 2+i, listarray[nowFirstIndex+i].name, mainPlayStyle)
 			} else {
-				drawTextLine(screen, 5, 3+countt, listarray[startv+countt].name, mainStyle)
+				drawTextLine(screen, 0, 2+i, "     ", mainPlayStyle)
+				drawTextLine(screen, 5, 2+i, listarray[nowFirstIndex+i].name, mainStyle)
 			}
 		}
-		countt++
 	}
+
 	drawTextLine(screen, 5, 30, tip, tipStyle)          //绘制提示
-	drawTextLine(screen, 5, 17, nowplaytitle, tipStyle) //绘制当前播放歌曲名称
+	drawTextLine(screen, 5, 16, nowplaytitle, tipStyle) //绘制当前播放歌曲名称
+	drawTextLine(screen, 5, 17, nowlrc, tipStyle)       //绘制当前播放歌曲的歌词
 
 	//处理与绘制播放时长
 	var positionStatus string = ""
@@ -186,7 +199,7 @@ func TDrawCls(screen tcell.Screen) {
 	drawTextLine(screen, 5, 21, "播放状态: "+state, mainBackgroundStyle)
 }
 
-//按键事件响应
+// 按键事件响应
 func THandle(event tcell.Event) (change, exit bool) {
 	switch event := event.(type) {
 	case *tcell.EventKey:
@@ -206,15 +219,26 @@ func THandle(event tcell.Event) (change, exit bool) {
 				fsteam.Close()
 				fsteam = nil
 			}
+
+			lrcPath := path.Join(filepath, GetFileName(listarray[nowdispindex].filename)+".lrc")
+			nowlrc = lrcPath
+			if ok, _ := PathExists(lrcPath); ok {
+				if ok, bk := loadLyric(ReadFile(lrcPath)); ok {
+					lrcEngine = bk
+				} else {
+					lrcEngine = nil
+				}
+			} else {
+				lrcEngine = nil
+			}
+
 			var errs error
-			fsteam, errs = os.Open(filepath + "/" + listarray[nowpage*maxpagerow+nowdispindex].filename)
+			fsteam, errs = os.Open(filepath + "/" + listarray[nowdispindex].filename)
 			if errs != nil {
 				report(errs)
 			}
 
 			nowplayindex = nowdispindex
-			nowplayarrindex = nowpage*maxpagerow + nowdispindex
-			nowplayindexpage = nowpage
 
 			var errs2 error
 			ssc, bformat, errs2 = mp3.Decode(fsteam)
@@ -226,7 +250,7 @@ func THandle(event tcell.Event) (change, exit bool) {
 			speaker.Init(bformat.SampleRate, bformat.SampleRate.N(time.Second/10))
 			ap = nil
 			ap = newAudioPanel(bformat.SampleRate, ssc)
-			nowplaytitle = listarray[nowpage*maxpagerow+nowdispindex].filename
+			nowplaytitle = listarray[nowdispindex].filename
 			ap.play()
 			return true, false
 		}
@@ -270,22 +294,12 @@ func THandle(event tcell.Event) (change, exit bool) {
 			//向上选择
 			if nowdispindex-1 > -1 {
 				nowdispindex--
-			} else {
-				if nowpage-1 > -1 {
-					nowpage--
-					nowdispindex = maxpagerow - 1
-				}
 			}
 			return true, false
 		case 's':
 			//向下选择
 			if nowdispindex+1 < nowdispmaxindex {
 				nowdispindex++
-			} else {
-				if nowpage+1 < maxpage+1 {
-					nowpage++
-					nowdispindex = 0
-				}
 			}
 			return true, false
 		case 'a':
@@ -330,7 +344,7 @@ func THandle(event tcell.Event) (change, exit bool) {
 	return false, false
 }
 
-//主函数
+// 主函数
 func main() {
 	//扫描指定目录
 	fmt.Println("scan start")
@@ -339,22 +353,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	filescount := 0
 	for _, file := range files {
 		if !file.IsDir() {
-			listarray = append(listarray, listrow{name: file.Name(), filename: file.Name()})
-			filescount++
+			if path.Ext(file.Name()) == ".mp3" {
+				listarray = append(listarray, listrow{name: file.Name(), filename: file.Name()})
+			}
 		}
 	}
 
-	if len(listarray) < maxpagerow+1 {
-		nowdispmaxindex = len(listarray)
-	} else {
-		nowdispmaxindex = maxpagerow
-	}
+	nowdispmaxindex = len(listarray)
 
-	//最大页面
-	maxpage = round((float64(len(listarray)) / float64(maxpagerow)))
 	fmt.Println("scan ok")
 
 	screen, err := tcell.NewScreen()
@@ -372,7 +380,7 @@ func main() {
 	TDrawCls(screen)
 	screen.Show()
 
-	seconds := time.Tick(time.Second)
+	seconds := time.Tick(time.Millisecond * 25)
 	events := make(chan tcell.Event)
 	go func() {
 		for {
@@ -395,6 +403,11 @@ loop:
 				screen.Show()
 			}
 		case <-seconds:
+			if ap != nil && lrcEngine != nil {
+				nowlrc = getNowLyric(ap.sampleRate.D(ap.streamer.Position()), lrcEngine)
+			} else {
+				nowlrc = "暂无歌词"
+			}
 			screen.Clear()
 			TDrawCls(screen)
 			screen.Show()
@@ -402,18 +415,13 @@ loop:
 	}
 }
 
-//错误处理
+// 错误处理
 func report(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }
 
-//处理小数点
-func round(x float64) int {
-	return int(math.Floor(x + 0.5))
-}
-
-//格式化时间
+// 格式化时间
 func fmtDuration(d time.Duration) string {
 	d = d.Round(time.Second)
 	h := d / time.Hour
@@ -422,4 +430,28 @@ func fmtDuration(d time.Duration) string {
 	d -= m * time.Minute
 	s := d / time.Second
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
+func PathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func ReadFile(path string) string {
+	f, err := ioutil.ReadFile(path)
+	if err != nil {
+		fmt.Println("read fail", err)
+		return ""
+	}
+	return string(f)
+}
+
+func GetFileName(filePath string) string {
+	return strings.TrimSuffix(path.Base(filePath), path.Ext(filePath))
 }
